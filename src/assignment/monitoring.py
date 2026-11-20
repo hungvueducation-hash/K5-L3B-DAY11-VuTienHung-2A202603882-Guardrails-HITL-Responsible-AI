@@ -41,17 +41,43 @@ class MonitoringAlert:
     judge_checks: int = 0
     judge_fails: int = 0
 
+    def record(self, *, blocked: bool, layer: str | None = None) -> None:
+        """Cập nhật bộ đếm sau mỗi request."""
+        self.total_requests += 1
+        if blocked:
+            self.blocked_requests += 1
+        if layer == "rate_limiter":
+            self.rate_limit_hits += 1
+
     def check_metrics(self) -> list[Alert]:
-        """TODO: compute rates, append Alert objects when thresholds exceeded."""
-        raise NotImplementedError("Implement MonitoringAlert.check_metrics")
+        """Tính rate, thêm Alert khi vượt ngưỡng (không trùng lặp metric)."""
+        snap = self.snapshot()
+        fired = {a.metric for a in self.alerts}
+        checks = [
+            ("block_rate", snap["block_rate"], self.block_rate_threshold,
+             "Block rate cao bất thường — có thể đang bị tấn công"),
+            ("rate_limit_hits", float(self.rate_limit_hits),
+             float(self.rate_limit_hit_threshold),
+             "Nhiều lượt bị rate limit — nghi flooding / cost attack"),
+            ("judge_fail_rate", snap["judge_fail_rate"],
+             self.judge_fail_rate_threshold,
+             "Judge đánh dấu unsafe nhiều — output model có vấn đề"),
+        ]
+        for metric, value, threshold, msg in checks:
+            if value > threshold and metric not in fired:
+                self.alerts.append(Alert(metric, value, threshold, msg))
+        return self.alerts
 
     def export_json(self, filepath: str | None = None):
-        """TODO: write metrics + alerts to JSON under repo-root ``outputs/`` by default.
-        Use ``filepath or default_metrics_path()`` so running from ``src/`` does not
-        create ``src/outputs/``.
-        """
-        _ = filepath or default_metrics_path()
-        raise NotImplementedError("Implement MonitoringAlert.export_json")
+        """Ghi metrics + alerts ra <repo>/outputs/metrics.json."""
+        self.check_metrics()
+        path = Path(filepath or default_metrics_path())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(self.snapshot(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return path
 
     def snapshot(self) -> dict:
         block_rate = (
